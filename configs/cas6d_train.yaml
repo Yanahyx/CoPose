@@ -1,0 +1,12 @@
+name: cas6d_train
+type: cas6d
+
+detector: configs/detector/detector_train.yaml
+selector: configs/selector/selector_train.yaml
+refiner:  configs/refiner/refiner_train.yaml
+
+
+ref_resolution: 128   # reference image resolution
+ref_view_num: 64      # view number used in selection
+det_ref_view_num: 32  # view number used in detection
+refine_iter: 3  
