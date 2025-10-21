@@ -3,7 +3,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torchvision
 import numpy as np
-from network.refiner_ablation import FPN
 from dataset.database import NormalizedDatabase, normalize_pose, get_object_center, get_diameter, denormalize_pose
 from network.operator import pose_apply_th, normalize_coords
 from network.pretrain_models import VGGBNPretrainV3
@@ -140,9 +139,7 @@ class RefineFeatureNet(nn.Module):
                             kernel_size=1,\
                             stride=1,\
                             padding=0, \
-                            bias=True) 
-        self.fpn = FPN([512,512,128],128)  
-        self.use_fpn = False     
+                            bias=True)    
         for m in self.modules():
             if isinstance(m, nn.Conv3d) or isinstance(m, nn.ConvTranspose3d):
                 nn.init.kaiming_normal(m.weight.data, mode='fan_in')
@@ -180,10 +177,7 @@ class RefineFeatureNet(nn.Module):
         x1 = F.interpolate(self.conv1(x1),scale_factor=2,mode='bilinear')
         x2 = F.interpolate(self.conv2(x2),scale_factor=4,mode='bilinear')
         x = torch.cat([x0,x1,x2],1)
-        if self.use_fpn:
-            x = self.fpn([x0,x1,x])
-        else:
-            x = self.conv_out(x)  
+        x = self.conv_out(x)  
         if self.use_dino:
             # -------------------------------------------------------- 
             dino_imgs = F.interpolate(dino_imgs, size=(256, 256)) 

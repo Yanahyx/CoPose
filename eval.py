@@ -143,12 +143,14 @@ def main(args):
     print(cfg)
     estimator = name2estimator[cfg['type']](cfg)
     
-    object_name_list = [  "linemod/cat", "linemod/benchvise", "linemod/cam", \
-                          "linemod/driller", "linemod/duck",  \
+    # 根据命令行参数选择数据集
+    if args.dataset == "LINEMOD":
+        object_name_list = ["linemod/cat", "linemod/benchvise", "linemod/cam", \
+                           "linemod/driller", "linemod/duck", \
                            "linemod/lamp"]
-
-    #object_name_list = ["genmop/chair", "genmop/plug_en", "genmop/piggy",  \
-    #                    "genmop/scissors", "genmop/tformer"]
+    else:  # 默认使用GENMOP数据集
+        object_name_list = ["genmop/chair", "genmop/plug_en", "genmop/piggy",  \
+                            "genmop/scissors", "genmop/tformer"]
 
     t1 = time.time()
     logger.debug(f"use_gt_box2d:{ args.use_gt_box } , use_refiner:{ args.use_refiner }")
@@ -242,6 +244,7 @@ if __name__=="__main__":
     parser.add_argument('--split_type', type=str, default=None)
     parser.add_argument('--use_gt_box',action='store_true', dest='use_gt_box', default=False)
     parser.add_argument('--use_refiner',action='store_true', dest='use_refiner', default=True)
+    parser.add_argument('--dataset', type=str, default="GENMOP", choices=["LINEMOD", "GENMOP"], help="Dataset to evaluate")
     args = parser.parse_args()
     main(args)
 

@@ -15,4 +15,5 @@
 # python3 train_model.py --cfg configs/detector/detector_train.yaml
 # python3 train_model.py --cfg configs/selector/selector_train.yaml
 nohup python3 train_model.py --cfg configs/refiner/refiner_train.yaml > refiner_train.log 2>&1 &
-nohup python3 eval.py --cfg configs/cas6d_train.yaml > eval.log 2>&1 &
+nohup python3 eval.py --cfg configs/cas6d_train.yaml --dataset LINEMOD > eval1.log 2>&1 &
+nohup python3 eval.py --cfg configs/cas6d_train.yaml --dataset GENMOP > eval2.log 2>&1 &

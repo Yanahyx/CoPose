@@ -17,8 +17,6 @@ train_dataset_type: ref_train
 train_dataset_cfg:
     batch_size: 4
     use_database_sample_prob: true
-    #database_sample_prob: [ 40,10,10 ]
-    #database_names: ['shapenet_train','linemod_train','genmop_train' ]
     database_sample_prob: [ 40, 10, 10, 10 ]
     database_names: ['shapenet_train', 'gso_train_128', 'linemod_train', 'genmop_train' ]
 
