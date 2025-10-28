@@ -146,7 +146,21 @@ if __name__=="__main__":
     args = parser.parse_args()
 
     args.cfg = 'configs/cas6d_train.yaml'
+    ## LINEMOD
+    iou_list, mAP_list = [], []
+    for obj in ['cat', 'benchvise', 'cam', 'driller', 'duck']:
+        args.object_name = 'linemod/' + obj
+        iou, mAP = main(args)
+        iou_list.append(iou)
+        mAP_list.append(mAP)
 
+    iou_list = np.asarray(iou_list).mean()
+    mAP_list = np.asarray(mAP_list).mean()
+    print("Average --- Mean IoU: %.4f --- mAP: %.4f \n" % (iou_list, mAP_list))
+    with open(f'../data/exp/performance.txt', 'a') as f:
+        f.write('Average --- Mean IoU: %.4f --- mAP: %.4f \n' % (iou_list, mAP_list))
+    f.close()
+    
     # GenMOP
     iou_list, mAP_list = [], []
     for obj in ['chair', 'plug_en', 'piggy', 'scissors', 'tformer']:
@@ -163,17 +177,4 @@ if __name__=="__main__":
         f.write('Average --- Mean IoU: %.4f --- mAP: %.4f \n' % (iou_list, mAP_list))
     f.close()
 
-    ## LINEMOD
-    iou_list, mAP_list = [], []
-    for obj in ['cat', 'benchvise', 'cam', 'driller', 'duck']:
-        args.object_name = 'linemod/' + obj
-        iou, mAP = main(args)
-        iou_list.append(iou)
-        mAP_list.append(mAP)
 
-    iou_list = np.asarray(iou_list).mean()
-    mAP_list = np.asarray(mAP_list).mean()
-    print("Average --- Mean IoU: %.4f --- mAP: %.4f \n" % (iou_list, mAP_list))
-    with open(f'../data/exp/performance.txt', 'a') as f:
-        f.write('Average --- Mean IoU: %.4f --- mAP: %.4f \n' % (iou_list, mAP_list))
-    f.close()
