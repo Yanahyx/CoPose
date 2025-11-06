@@ -24,7 +24,7 @@ class VisualizeBBoxScale(Loss):
     def __call__(self, data_pr, data_gt, step, **kwargs):
         data_index=kwargs['data_index']
         model_name=kwargs['model_name']
-        output_root = kwargs['output_root'] if 'output_root' in kwargs else 'data/vis'
+        output_root = kwargs['output_root'] if 'output_root' in kwargs else './data/vis'
 
         b, _, hr, wr = data_gt['ref_imgs_info']['imgs'].shape
         que_select_id = data_pr['que_select_id'][0].cpu().numpy() # 3
@@ -65,7 +65,7 @@ class VisualizeSelector(Loss):
     def __call__(self, data_pr, data_gt, step, **kwargs):
         data_index=kwargs['data_index']
         model_name=kwargs['model_name']
-        output_root = kwargs['output_root'] if 'output_root' in kwargs else 'data/vis'
+        output_root = kwargs['output_root'] if 'output_root' in kwargs else './data/vis'
 
         outputs = {}
         logits = data_pr['ref_vp_logits'] # qn,rfn
@@ -213,7 +213,7 @@ class RefinerMetrics(Loss):
         if data_index % self.cfg['output_interval']!=0:
             return outputs
         model_name=kwargs['model_name']
-        output_root = kwargs['output_root'] if 'output_root' in kwargs else 'data/vis'
+        output_root = kwargs['output_root'] if 'output_root' in kwargs else './data/vis'
 
         que_imgs = color_map_backward(data_gt['que_imgs_info']['imgs'].cpu().numpy()).transpose([0,2,3,1])
         ref_imgs = color_map_backward(data_gt['ref_imgs_info']['imgs'].cpu().numpy()).transpose([0,1,3,4,2])
