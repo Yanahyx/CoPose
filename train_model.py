@@ -7,7 +7,6 @@ from utils.base_utils import load_cfg
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--cfg', type=str, default='configs/cas6d_train/')
-#parser.add_argument('--cfg', type=str, default='configs/train/')
 flags = parser.parse_args()
 
 trainer = Trainer(load_cfg(flags.cfg),)

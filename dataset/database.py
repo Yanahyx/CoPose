@@ -551,7 +551,7 @@ class GoogleScannedObjectDatabase(BaseDatabase):
             mask=imread(f'{self.prefix}/mask/{int(img_id):06}.png')>0
         return mask
 
-Co3D_ROOT = '../data/co3d'
+Co3D_ROOT = '../data/co3d_256_512'
 
 def mask2bbox(mask):
     if np.sum(mask)==0:
