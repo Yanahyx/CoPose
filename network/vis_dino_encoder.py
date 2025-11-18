@@ -4,7 +4,7 @@ import torch.nn.functional as F
 import torch
 import network.vision_transformer as vits
 from network.vision_transformer import Attention, dino_vits16, dino_vits8 
-from network.vision_transformer import dino_vitb16, dino_vitb8
+from network.vision_transformer import dino_vitb16, dino_vitb8, dinov3_vitb16
 from network.vision_transformer import dino_xcit_small_12_p16
 from network.vision_transformer import dino_xcit_medium_24_p8
 from  network.vision_transformer  import vit_small

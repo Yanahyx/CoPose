@@ -450,3 +450,15 @@ def dino_xcit_medium_24_p8(pretrained=True, **kwargs):
         )
         model.load_state_dict(state_dict, strict=True)
     return model
+
+def dinov3_vitb16(pretrained=True, **kwargs):
+    """
+    ViT-Base/16x16 pre-trained with DINO.
+    Achieves 76.1% top-1 accuracy on ImageNet with k-NN classification.
+    """
+    model = vit_base(patch_size=16, num_classes=0)
+    # 从本地 pth 文件加载权重
+    pth_path = "./dinov3_vitb16_pretrain_lvd1689m.pth"
+    state_dict = torch.load(pth_path, map_location="cpu")
+    model.load_state_dict(state_dict, strict=True)
+    return model
