@@ -141,9 +141,12 @@ class Gen6DEstimator:
         detector = name2network[detector_cfg['network']](detector_cfg)
         name = detector_cfg["name"]
         # state_dict = torch.load(f'../data/checkpoints/{name}/model_best.pth')
-        state_dict = torch.load(f'../data/checkpoints/detector_pretrain/model_best.pth')
+        # state_dict = torch.load(f'../data/checkpoints/detector_pretrain/model_best.pth')
+        # detector.load_state_dict(state_dict['network_state_dict'], strict = True  )
+        # logger.debug(f'load from ../data/checkpoints/detector_pretrain/model_best.pth step {state_dict["step"]}')
+        state_dict = torch.load(f'../data/checkpoints/{name}/model_best.pth')
         detector.load_state_dict(state_dict['network_state_dict'], strict = True  )
-        logger.debug(f'load from ../data/checkpoints/detector_pretrain/model_best.pth step {state_dict["step"]}')
+        logger.debug(f'load from ../data/checkpoints/{name}/model_best.pth step {state_dict["step"]}')
         detector.cuda().eval()
         return detector
 

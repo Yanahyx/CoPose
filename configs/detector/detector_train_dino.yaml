@@ -1,0 +1,89 @@
+detection_scales:
+    - -1.0
+    - -0.5
+    - 0.0
+    - 0.5
+key_metric_name: mean_iou
+loss:
+    - detection_softmax
+    - detection_offset_scale
+lr_cfg:
+    decay_rate: 0.5
+    decay_step: 100000
+    lr_init: 0.0001
+lr_type: exp_decay
+name: detector_train_dino
+network: detector_dino
+offset_ratio: 1.0
+optimizer_type: adam
+output_interval: 15
+save_interval: 500
+scale_ratio: 1.0
+score_diff_thresh: 1.0
+total_step: 300000
+train_dataset_cfg:
+    batch_size: 8
+    database_names:
+        - co3d_train
+        - gso_train_128
+        - shapenet_train
+        - linemod_train
+        - genmop_train
+    database_sample_prob:
+        - 100
+        - 10
+        - 30
+        - 10
+        - 10
+    detector_offset_std: 3
+    detector_real_aug_rot: true
+    detector_rotation_range:
+        - -22.5
+        - 22.5
+    detector_scale_range:
+        - -0.5
+        - 1.2
+    offset_type: random
+    que_add_background_objects: true
+    que_background_objects_num: 2
+    que_background_objects_ratio: 0.3
+    ref_type: fps_32
+    reference_num: 32
+    resolution: 128
+    use_database_sample_prob: true
+train_dataset_type: det_train
+train_log_step: 50
+use_offset_loss: true
+use_ref_view_mask: false
+val_interval: 5000
+val_metric:
+    - vis_bbox_scale
+val_set_list:
+    - cfg:
+          ref_database_name: linemod/cat
+          ref_split_type: linemod_val
+          test_database_name: linemod/cat
+          test_split_type: linemod_val
+      name: cat_val
+      type: det_val
+    - cfg:
+          ref_database_name: linemod/duck
+          ref_split_type: linemod_val
+          test_database_name: linemod/duck
+          test_split_type: linemod_val
+      name: duck_val
+      type: det_val
+    - cfg:
+          ref_database_name: genmop/piggy-ref
+          ref_split_type: all
+          test_database_name: genmop/piggy-test
+          test_split_type: all
+      name: piggy_val
+      type: det_val
+    - cfg:
+          ref_database_name: genmop/scissors-ref
+          ref_split_type: all
+          test_database_name: genmop/scissors-test
+          test_split_type: all
+      name: scissors_val
+      type: det_val

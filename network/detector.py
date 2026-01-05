@@ -474,9 +474,11 @@ class Detector(BaseDetector):
         qn, _, h, w = que_imgs.shape
 
         outputs = self.detect_impl(que_imgs)
+        scores = outputs['scores'].detach()
+        scales_all=outputs['select_pr_scale'].detach()
         positions, scales = self.parse_detection(
             outputs['scores'].detach(), outputs['select_pr_scale'].detach(),
             outputs['select_pr_offset'].detach(), self.pool_ratio)
-        detection_results = {'positions': positions, 'scales': scales}
+        detection_results = {'positions': positions, 'scales': scales, 'scores': scores, 'scales_all': scales_all}
         detection_results = to_cpu_numpy(detection_results)
         return detection_results

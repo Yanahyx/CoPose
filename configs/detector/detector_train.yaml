@@ -25,13 +25,13 @@ train_dataset_cfg:
     batch_size: 8
     database_names:
         - co3d_train
-        #- gso_train_128
+        - gso_train_128
         - shapenet_train
         - linemod_train
         - genmop_train
     database_sample_prob:
         - 100
-        #- 10
+        - 10
         - 30
         - 10
         - 10

@@ -3,15 +3,15 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torchvision
 import numpy as np
-from network.refiner_ablation import FPN
 from dataset.database import NormalizedDatabase, normalize_pose, get_object_center, get_diameter, denormalize_pose
-from myNet.network.operator1 import pose_apply_th, normalize_coords
+from network.operator import pose_apply_th, normalize_coords
 from network.pretrain_models import VGGBNPretrainV3
 from utils.base_utils import pose_inverse, project_points, color_map_forward, to_cuda, pose_compose
 from utils.database_utils import look_at_crop, select_reference_img_ids_refinement, normalize_reference_views
 from utils.pose_utils import let_me_look_at, compose_sim_pose, pose_sim_to_pose_rigid
 from utils.imgs_info import imgs_info_to_torch
-from network.vis_dino_encoder import VitExtractor
+from transformers import AutoImageProcessor, AutoModel
+
 
 # sin-cose embedding module
 class Embedder(nn.Module):
@@ -61,73 +61,10 @@ class FeedForward(nn.Module):
         x = self.dp(self.fc2(x))
         return x
 
-
-# Subtraction-based efficient attention
-class Attention2D(nn.Module):
-    def __init__(self, dim, dp_rate):
-        super(Attention2D, self).__init__()
-        self.q_fc = nn.Linear(dim, dim, bias=False)
-        self.k_fc = nn.Linear(dim, dim, bias=False)
-        self.v_fc = nn.Linear(dim, dim, bias=False)
-        self.pos_fc = nn.Sequential(
-            nn.Linear(4, dim // 8),
-            nn.ReLU(),
-            nn.Linear(dim // 8, dim),
-        )
-        self.attn_fc = nn.Sequential(
-            nn.Linear(dim, dim // 8),
-            nn.ReLU(),
-            nn.Linear(dim // 8, dim),
-        )
-        self.out_fc = nn.Linear(dim, dim)
-        self.dp = nn.Dropout(dp_rate)
-
-    def forward(self, q, k, pos, mask=None):
-        q = self.q_fc(q)
-        k = self.k_fc(k)
-        v = self.v_fc(k)
-
-        pos = self.pos_fc(pos)
-        attn = k - q[:, :, None, :] + pos
-        attn = self.attn_fc(attn)
-        if mask is not None:
-            attn = attn.masked_fill(mask == 0, -1e9)
-        attn = torch.softmax(attn, dim=-2)
-        attn = self.dp(attn)
-
-        x = ((v + pos) * attn).sum(dim=2)
-        x = self.dp(self.out_fc(x))
-        return x
-
-
-# View Transformer
-class Transformer2D(nn.Module):
-    def __init__(self, dim, ff_hid_dim, ff_dp_rate, attn_dp_rate):
-        super(Transformer2D, self).__init__()
-        self.attn_norm = nn.LayerNorm(dim, eps=1e-6)
-        self.ff_norm = nn.LayerNorm(dim, eps=1e-6)
-
-        self.ff = FeedForward(dim, ff_hid_dim, ff_dp_rate)
-        self.attn = Attention2D(dim, attn_dp_rate)
-
-    def forward(self, q, k, pos, mask=None):
-        residue = q
-        x = self.attn_norm(q)
-        x = self.attn(x, k, pos, mask)
-        x = x + residue
-
-        residue = x
-        x = self.ff_norm(x)
-        x = self.ff(x)
-        x = x + residue
-
-        return x
-
-
 class RefineFeatureNet(nn.Module):
     def __init__(self, \
                  norm_layer='instance',\
-                 use_dino=False,\
+                 use_dino=True,\
                  upsample=False):
 
         super().__init__()
@@ -176,35 +113,31 @@ class RefineFeatureNet(nn.Module):
                                         bias=True)  
 
         if self.use_dino:
-            self.fuse_conv = nn.Conv2d(in_channels=512, \
-                                       out_channels=128, \
-                                       kernel_size=1,\
-                                       stride=1,\
-                                       padding=0, \
-                                       bias=True)
-
-            self.fuse_conv1 = nn.Conv2d(in_channels=256+384, \
-                            out_channels=256, \
-                            kernel_size=1,\
-                            stride=1,\
-                            padding=0, \
-                            bias=True)  
+            # 改进方案：渐进式融合网络 + 特征对齐 + 门控机制
+            # 方案1：渐进式降维融合 (896->512->256->128)，保留更多信息
+            self.fuse_conv = nn.Sequential(
+                # 第一层：896 -> 512，使用3x3卷积提取空间特征
+                nn.Conv2d(in_channels=768+128, out_channels=512, kernel_size=3, stride=1, padding=1, bias=True),
+                norm(512),
+                nn.ReLU(True),
+                # 第二层：512 -> 256
+                nn.Conv2d(in_channels=512, out_channels=256, kernel_size=3, stride=1, padding=1, bias=True),
+                norm(256),
+                nn.ReLU(True),
+                # 第三层：256 -> 128
+                nn.Conv2d(in_channels=256, out_channels=128, kernel_size=1, stride=1, padding=0, bias=True),
+            )
             
-            self.fuse_conv2 = nn.Conv2d(in_channels=512+384, \
-                                        out_channels=512, \
-                                        kernel_size=1,\
-                                        stride=1,\
-                                        padding=0, \
-                                        bias=True) 
+            # 方案2：特征对齐 - 对DINO特征进行归一化，使其与VGG特征分布对齐
+            # self.dino_proj = nn.Sequential(
+            #     nn.Conv2d(768, 256, kernel_size=1, stride=1, padding=0, bias=True),
+            #     norm(256),
+            #     nn.ReLU(True),
+            # )
+            
+            # 方案4：残差连接路径
+            self.residual_proj = nn.Conv2d(128, 128, kernel_size=1, stride=1, padding=0, bias=True)
 
-            self.fuse_conv3 = nn.Conv2d(in_channels=512+384, \
-                            out_channels=512, \
-                            kernel_size=1,\
-                            stride=1,\
-                            padding=0, \
-                            bias=True) 
-        self.fpn = FPN([512,512,128],128)  
-        self.use_fpn = False     
         for m in self.modules():
             if isinstance(m, nn.Conv3d) or isinstance(m, nn.ConvTranspose3d):
                 nn.init.kaiming_normal(m.weight.data, mode='fan_in')
@@ -212,10 +145,19 @@ class RefineFeatureNet(nn.Module):
                     m.bias.data.zero_()
         
         if self.use_dino:
-            self.fea_ext =  VitExtractor(model_name='dino_vits8').eval()
-            for para in self.fea_ext.parameters():
+            self.dino_processor = AutoImageProcessor.from_pretrained("../dinov3-vitb16-pretrain-lvd1689m")
+            self.dino_model = AutoModel.from_pretrained(
+                "../dinov3-vitb16-pretrain-lvd1689m",
+                dtype=torch.float16,  # 改为float32提高数值稳定性
+                device_map="auto",
+                attn_implementation="sdpa"
+            ).eval()
+            for para in self.dino_model.parameters():
                 para.requires_grad = False
-            self.fea_ext.requires_grad_(False) 
+            self.dino_model.requires_grad_(False)
+            self.dino_patch_size = self.dino_model.config.patch_size
+            self.dino_hidden_size = self.dino_model.config.hidden_size
+            self.dino_num_register_tokens = self.dino_model.config.num_register_tokens 
 
         self.backbone = VGGBNPretrainV3().eval()
         for para in self.backbone.parameters():
@@ -231,46 +173,164 @@ class RefineFeatureNet(nn.Module):
         if self.use_dino:
             dino_imgs = imgs.clone()
             
-        imgs = self.img_norm(imgs)
+        imgs = self.img_norm(imgs) #[6, 3, 128, 128]
         self.backbone.eval()
         with torch.no_grad():
             x0, x1, x2 = self.backbone(imgs)
             x0 = F.normalize(x0, dim=1)
             x1 = F.normalize(x1, dim=1)
             x2 = F.normalize(x2, dim=1)
-        x0 = self.conv0(x0)
-        x1 = F.interpolate(self.conv1(x1),scale_factor=2,mode='bilinear')
-        x2 = F.interpolate(self.conv2(x2),scale_factor=4,mode='bilinear')
-        x = torch.cat([x0,x1,x2],1)
-        if self.use_fpn:
-            x = self.fpn([x0,x1,x])
-        else:
-            x = self.conv_out(x)  
+        x0 = self.conv0(x0) #[6, 64, 32, 32]
+        x1 = F.interpolate(self.conv1(x1),scale_factor=2,mode='bilinear') #[6, 64, 32, 32]
+        x2 = F.interpolate(self.conv2(x2),scale_factor=4,mode='bilinear') #[6, 64, 32, 32]
+        x = torch.cat([x0,x1,x2],1) #[6, 192, 32, 32]
+        x = self.conv_out(x)  #[6, 128, 32, 32]
         if self.use_dino:
             # -------------------------------------------------------- 
-            dino_imgs = F.interpolate(dino_imgs, size=(256, 256)) 
-            dino_ret =  self.fea_ext.get_vit_attn_feat(dino_imgs)
-            attn, cls_, feat = dino_ret['attn'], dino_ret['cls_'], dino_ret['feat']
-            dino_fea = feat.permute(0,2,1).reshape(-1,384,32,32)    
-            fused_fea = torch.cat( (x,dino_fea), dim = 1)
-            x = self.fuse_conv(fused_fea)
+            # 使用dinov3处理，类似test.py中的方式
+            inputs = self.dino_processor(images=dino_imgs, return_tensors="pt")
+            # 计算patch数量
+            img_height, img_width = inputs.pixel_values.shape[-2:]  # 6,3,224,24
+            num_patches_height = img_height // self.dino_patch_size # 224/16=14
+            num_patches_width = img_width // self.dino_patch_size # 224/16=14
+            # 获取模型输出
+            with torch.inference_mode():
+                outputs = self.dino_model(**inputs)
+            
+            last_hidden_states = outputs.last_hidden_state  # [6, 1+4+196, 768]
+            # 提取patch features（跳过cls token和register tokens）
+            patch_features_flat = last_hidden_states[:, 1 + self.dino_num_register_tokens:, :]  # [6,196, 768]
+            
+            # 转换为空间布局并上采样到32x32
+            patch_features = patch_features_flat.permute(0, 2, 1).reshape(
+                -1, self.dino_hidden_size, num_patches_height, num_patches_width
+            )  # [6, 768, 14, 14]
+            dino_fea = F.interpolate(
+                patch_features, size=(32, 32), mode='bilinear', align_corners=False
+            )  # [6, 768, 32, 32]
+            dino_fea = dino_fea.float()  # 转换为float32
+            
+            # 改进的融合流程（简化版）：
+            # 保持DINO特征的完整信息，使用渐进式网络降维
+            fused_fea = torch.cat((x, dino_fea), dim=1)   # [6, 128+768=896, 32, 32]
+            x_fused = self.fuse_conv(fused_fea)  # [6, 128, 32, 32]
+            
+            # 步骤5：残差连接 - 保留部分原始VGG特征，增强梯度流
+            x_residual = self.residual_proj(x)  # [6, 128, 32, 32]
+            x = x_fused + 0.2 * x_residual  # 残差连接，权重可调（建议范围0.1-0.3）
+            # import pdb
+            # pdb.set_trace()
             # --------------------------------------------------------
-        return x
+        return x   #[6, 128, 32, 32]
+
+class VolumeFeatureFusion(nn.Module):
+    """使用交叉注意力机制融合参考特征和查询特征"""
+    def __init__(self, feat_dim=128, norm_layer='instance'):
+        super().__init__()
+        if norm_layer == 'instance':
+            norm = nn.InstanceNorm3d
+        else:
+            raise NotImplementedError
+        
+        # 特征投影层
+        self.query_proj = nn.Sequential(
+            nn.Conv3d(feat_dim, feat_dim, 1, 1, 0),
+            norm(feat_dim),
+            nn.ReLU(True)
+        )
+        self.key_proj = nn.Sequential(
+            nn.Conv3d(feat_dim, feat_dim, 1, 1, 0),
+            norm(feat_dim),
+            nn.ReLU(True)
+        )
+        self.value_proj = nn.Sequential(
+            nn.Conv3d(feat_dim, feat_dim, 1, 1, 0),
+            norm(feat_dim),
+            nn.ReLU(True)
+        )
+        
+        # 输出投影层
+        self.out_proj = nn.Sequential(
+            nn.Conv3d(feat_dim * 2, feat_dim, 1, 1, 0),
+            norm(feat_dim),
+            nn.ReLU(True)
+        )
+        
+        # 门控机制：控制参考特征和查询特征的融合权重
+        self.gate = nn.Sequential(
+            nn.Conv3d(feat_dim * 2, feat_dim, 3, 1, 1),
+            norm(feat_dim),
+            nn.ReLU(True),
+            nn.Conv3d(feat_dim, 2, 1, 1, 0),
+            nn.Softmax(dim=1)
+        )
+        
+    def forward(self, ref_feat, que_feat):
+        """
+        @param ref_feat: [b, f, sx, sy, sz] 参考特征（均值）
+        @param que_feat: [b, f, sx, sy, sz] 查询特征
+        @return: [b, f, sx, sy, sz] 融合后的特征
+        """
+        # 改进的融合方式：使用通道注意力和空间特征交互
+        # 1. 特征投影
+        q = self.query_proj(que_feat)  # [b, f, sx, sy, sz]
+        k = self.key_proj(ref_feat)    # [b, f, sx, sy, sz]
+        v = self.value_proj(ref_feat)  # [b, f, sx, sy, sz]
+        
+        # 2. 计算通道级别的相似度（更高效）
+        # 对每个空间位置，计算查询和参考特征在通道维度上的相似度
+        b, f, sx, sy, sz = q.shape
+        # 计算逐元素的相似度（点积）
+        similarity = torch.sum(q * k, dim=1, keepdim=True)  # [b, 1, sx, sy, sz]
+        similarity = similarity / (f ** 0.5)  # 缩放
+        attn_map = torch.sigmoid(similarity)  # [b, 1, sx, sy, sz]
+        
+        # 3. 使用注意力图调制参考特征
+        attn_feat = attn_map * v  # [b, f, sx, sy, sz]
+        
+        # 4. 门控融合：自适应权重
+        concat_feat = torch.cat([attn_feat, que_feat], dim=1)  # [b, 2f, sx, sy, sz]
+        gate_weights = self.gate(concat_feat)  # [b, 2, sx, sy, sz]
+        
+        # 5. 加权融合
+        fused = gate_weights[:, 0:1] * attn_feat + gate_weights[:, 1:2] * que_feat
+        
+        # 6. 残差连接和输出投影
+        concat_out = torch.cat([fused, que_feat], dim=1)  # [b, 2f, sx, sy, sz]
+        out = self.out_proj(concat_out) + que_feat  # 残差连接
+        
+        return out
+
 
 class RefineVolumeEncodingNet(nn.Module):
-    def __init__(self,norm_layer='no_norm'):
+    def __init__(self,norm_layer='no_norm', use_attention_fusion=True):
         super().__init__()
         if norm_layer == 'instance':
             norm=nn.InstanceNorm3d
         else:
             raise NotImplementedError
 
-        self.mean_embed = nn.Sequential(
-            nn.Conv3d(128 * 2, 64, 3, 1, 1),
-            norm(64),
-            nn.ReLU(True),
-            nn.Conv3d(64, 64, 3, 1, 1)
-        )
+        self.use_attention_fusion = use_attention_fusion
+        
+        if self.use_attention_fusion:
+            # 使用注意力融合模块
+            self.fusion_module = VolumeFeatureFusion(feat_dim=128, norm_layer=norm_layer)
+            # 融合后的特征维度仍然是128，所以mean_embed输入改为128*2（融合特征+查询特征）
+            self.mean_embed = nn.Sequential(
+                nn.Conv3d(128 * 2, 64, 3, 1, 1),
+                norm(64),
+                nn.ReLU(True),
+                nn.Conv3d(64, 64, 3, 1, 1)
+            )
+        else:
+            # 原始方式
+            self.mean_embed = nn.Sequential(
+                nn.Conv3d(128 * 2, 64, 3, 1, 1),
+                norm(64),
+                nn.ReLU(True),
+                nn.Conv3d(64, 64, 3, 1, 1)
+            )
+            
         self.var_embed = nn.Sequential(
             nn.Conv3d(128, 64, 3, 1, 1),
             norm(64),
@@ -313,8 +373,17 @@ class RefineVolumeEncodingNet(nn.Module):
             nn.Conv3d(512, 512, 3, 1, 1)
         )
 
-    def forward(self, mean, var):
-        x = torch.cat([self.mean_embed(mean),self.var_embed(var)],1)
+    def forward(self, mean, var, que_feat=None):
+        if self.use_attention_fusion and que_feat is not None:
+            # 使用注意力融合
+            fused_feat = self.fusion_module(mean, que_feat)  # [b, 128, sx, sy, sz]
+            # 将融合特征和查询特征拼接
+            mean_input = torch.cat([fused_feat, que_feat], dim=1)  # [b, 256, sx, sy, sz]
+        else:
+            # 原始方式
+            mean_input = mean
+        
+        x = torch.cat([self.mean_embed(mean_input), self.var_embed(var)], 1)
         x = self.conv0(x)
         x = self.conv2(self.conv1(x))
         x = self.conv4(self.conv3(x))
@@ -350,21 +419,6 @@ class RefineRegressor(nn.Module):
         return r, t, s
 
 
-class Transformer(nn.Module):
-    def __init__(self, input_size, output_size, hidden_size, num_layer, nhead=8, dropout=0.1):
-        super(Transformer, self).__init__()
-        self.linear1 = nn.Linear(input_size, hidden_size)
-        self.transformer_encoder = nn.Sequential(*[nn.TransformerEncoderLayer(hidden_size, \
-            nhead=nhead, dropout=dropout, batch_first=True) for _ in range(num_layer)])
-        self.linear2 = nn.Linear(hidden_size, output_size)
-        self.dropout = nn.Dropout(dropout)
-    
-    def forward(self, x, state=None):
-        x = self.linear1(self.dropout(x))
-        output = self.transformer_encoder(x)
-        output = self.linear2(output)
-        return output, state
-
 from loguru import logger
 
 class VolumeRefiner(nn.Module):
@@ -376,26 +430,16 @@ class VolumeRefiner(nn.Module):
         super().__init__()
         
         self.use_dino = self.cfg.get("use_dino", False)  
-        self.use_transformer = self.cfg.get("use_transformer", False) 
-        logger.debug( f"VolumeRefiner use_dino:{self.use_dino}, use_transformer:{self.use_transformer}" )
+        logger.debug( f"VolumeRefiner use_dino:{self.use_dino}" )
         self.upsample = upsample
         self.feature_net = RefineFeatureNet('instance', self.use_dino, upsample)
-        self.volume_net = RefineVolumeEncodingNet('instance')
+        # 启用注意力融合机制
+        self.volume_net = RefineVolumeEncodingNet('instance', use_attention_fusion=True)
         self.regressor = RefineRegressor(upsample)
         
         # used in inference
         self.ref_database = None
         self.ref_ids = None
-
-        if self.use_transformer:
-            self.view_trans = Transformer(
-                input_size=32768, 
-                output_size=32768, 
-                hidden_size=64,
-                num_layer=1,
-                nhead=8, 
-                dropout=0.1
-            )
 
     @staticmethod
     def interpolate_volume_feats(feats, verts, projs, h_in, w_in):
@@ -463,13 +507,25 @@ class VolumeRefiner(nn.Module):
             vol_coords_cur = vol_coords[qi:qi+1].repeat(rfn,1,1,1,1) # rfn,sx,sy,sz,3
             vol_feats = VolumeRefiner.interpolate_volume_feats(ref_feats, vol_coords_cur, ref_proj[qi], h_in, w_in)
 
-            if self.use_transformer:
-                x = vol_feats.view(rfn,128,sn*sn*sn)
-                x  = self.view_trans(x)
-                vol_feats = x[0].view(rfn,128,sn,sn,sn)
-    
-            vol_feats_mean.append(torch.mean(vol_feats, 0))
-            vol_feats_std.append(torch.std(vol_feats, 0))
+            # 改进：使用加权平均，权重基于特征的一致性
+            # 先计算简单平均作为初始参考
+            vol_feats_mean_init = torch.mean(vol_feats, 0, keepdim=True)  # [1, f, sx, sy, sz]
+            # 计算每个参考视图与初始平均值的余弦相似度作为权重
+            vol_feats_norm = F.normalize(vol_feats, p=2, dim=1)  # [rfn, f, sx, sy, sz]
+            mean_norm = F.normalize(vol_feats_mean_init, p=2, dim=1)  # [1, f, sx, sy, sz]
+            similarity = torch.sum(vol_feats_norm * mean_norm, dim=1, keepdim=True)  # [rfn, 1, sx, sy, sz]
+            # 使用温度缩放使权重分布更合理
+            temperature = 2.0
+            weights = F.softmax(similarity / temperature, dim=0)  # [rfn, 1, sx, sy, sz]
+            
+            # 加权平均
+            vol_feats_mean_weighted = torch.sum(vol_feats * weights, dim=0)  # [f, sx, sy, sz]
+            vol_feats_mean.append(vol_feats_mean_weighted)
+            
+            # 计算加权标准差（使用加权平均作为中心）
+            vol_feats_mean_expanded = vol_feats_mean_weighted.unsqueeze(0).expand_as(vol_feats)  # [rfn, f, sx, sy, sz]
+            diff = vol_feats - vol_feats_mean_expanded
+            vol_feats_std.append(torch.sqrt(torch.sum(weights * diff ** 2, dim=0) + 1e-6))
 
         vol_feats_mean = torch.stack(vol_feats_mean, 0)
         vol_feats_std = torch.stack(vol_feats_std, 0)
@@ -495,8 +551,8 @@ class VolumeRefiner(nn.Module):
         vol_feats_mean, vol_feats_std, vol_feats_in, vol_coords = self.construct_feature_volume(
             que_imgs_info, ref_imgs_info, self.feature_net, refiner_sample_num) # qn,f,dn,h,w   qn,dn
 
-        vol_feats = torch.cat([vol_feats_mean, vol_feats_in], 1)
-        vol_feats = self.volume_net(vol_feats, vol_feats_std)
+        # 改进的融合方式：使用注意力机制融合参考特征和查询特征
+        vol_feats = self.volume_net(vol_feats_mean, vol_feats_std, vol_feats_in)
         vol_feats = vol_feats.flatten(1) # qn, f* 4**3
         rotation, offset, scale = self.regressor(vol_feats)
         outputs={'rotation': rotation, 'offset': offset, 'scale': scale}

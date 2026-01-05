@@ -224,3 +224,6 @@ class ViewpointSelector(nn.Module):
         self.extract_ref_feats(ref_imgs, ref_poses, object_center, object_vert, is_train)
         logits, angles = self.compute_view_point_feats(que_imgs)
         return {'ref_vp_logits': logits, 'angles_pr': angles}
+
+        # ref_vp_logits: 视角匹配分数 [qn, rfn] 查询图像对每个参考视角的匹配度
+        # angles_pr  预测的角度 [qn, rfn]， 查询图像对每个参考视角的角度

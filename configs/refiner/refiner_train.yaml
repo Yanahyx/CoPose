@@ -15,7 +15,7 @@ train_loader_batch_size: 2
 val_loader_batch_size: 1
 train_dataset_type: ref_train
 train_dataset_cfg:
-    batch_size: 8
+    batch_size: 2
     use_database_sample_prob: true
     database_sample_prob: [ 40, 10, 10, 10 ]
     database_names: ['shapenet_train', 'gso_train_128', 'linemod_train', 'genmop_train' ]

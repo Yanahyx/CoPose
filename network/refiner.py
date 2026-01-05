@@ -10,7 +10,7 @@ from utils.base_utils import pose_inverse, project_points, color_map_forward, to
 from utils.database_utils import look_at_crop, select_reference_img_ids_refinement, normalize_reference_views
 from utils.pose_utils import let_me_look_at, compose_sim_pose, pose_sim_to_pose_rigid
 from utils.imgs_info import imgs_info_to_torch
-from transformers import AutoImageProcessor, AutoModel
+from network.vis_dino_encoder import VitExtractor
 
 
 # sin-cose embedding module
@@ -65,6 +65,7 @@ class RefineFeatureNet(nn.Module):
     def __init__(self, \
                  norm_layer='instance',\
                  use_dino=True,\
+                 dino_model='dino_vits8',\
                  upsample=False):
 
         super().__init__()
@@ -113,51 +114,53 @@ class RefineFeatureNet(nn.Module):
                                         bias=True)  
 
         if self.use_dino:
-            # 改进方案：渐进式融合网络 + 特征对齐 + 门控机制
-            # 方案1：渐进式降维融合 (896->512->256->128)，保留更多信息
-            self.fuse_conv = nn.Sequential(
-                # 第一层：896 -> 512，使用3x3卷积提取空间特征
-                nn.Conv2d(in_channels=768+128, out_channels=512, kernel_size=3, stride=1, padding=1, bias=True),
-                norm(512),
-                nn.ReLU(True),
-                # 第二层：512 -> 256
-                nn.Conv2d(in_channels=512, out_channels=256, kernel_size=3, stride=1, padding=1, bias=True),
-                norm(256),
-                nn.ReLU(True),
-                # 第三层：256 -> 128
-                nn.Conv2d(in_channels=256, out_channels=128, kernel_size=1, stride=1, padding=0, bias=True),
-            )
-            
-            # 方案2：特征对齐 - 对DINO特征进行归一化，使其与VGG特征分布对齐
-            self.dino_proj = nn.Sequential(
-                nn.Conv2d(768, 256, kernel_size=1, stride=1, padding=0, bias=True),
-                norm(256),
-                nn.ReLU(True),
-            )
-            
-            # 方案4：残差连接路径
-            self.residual_proj = nn.Conv2d(128, 128, kernel_size=1, stride=1, padding=0, bias=True)
+            self.fuse_conv = nn.Conv2d(in_channels=512, \
+                                       out_channels=128, \
+                                       kernel_size=1,\
+                                       stride=1,\
+                                       padding=0, \
+                                       bias=True)
 
+            self.fuse_conv1 = nn.Conv2d(in_channels=256+384, \
+                            out_channels=256, \
+                            kernel_size=1,\
+                            stride=1,\
+                            padding=0, \
+                            bias=True)  
+            
+            self.fuse_conv2 = nn.Conv2d(in_channels=512+384, \
+                                        out_channels=512, \
+                                        kernel_size=1,\
+                                        stride=1,\
+                                        padding=0, \
+                                        bias=True) 
+
+            self.fuse_conv3 = nn.Conv2d(in_channels=512+384, \
+                            out_channels=512, \
+                            kernel_size=1,\
+                            stride=1,\
+                            padding=0, \
+                            bias=True)   
+            
+            # 添加通道调整卷积层，用于注意力计算
+            self.attn_conv = nn.Conv2d(in_channels=384, \
+                                     out_channels=128, \
+                                     kernel_size=1,\
+                                     stride=1,\
+                                     padding=0, \
+                                     bias=True)
+            
+            # 仅在use_dino为True时初始化特征提取器
+            self.fea_ext =  VitExtractor(model_name=dino_model).eval()
+            for para in self.fea_ext.parameters():
+                para.requires_grad = False
+            self.fea_ext.requires_grad_(False) 
+        
         for m in self.modules():
             if isinstance(m, nn.Conv3d) or isinstance(m, nn.ConvTranspose3d):
                 nn.init.kaiming_normal(m.weight.data, mode='fan_in')
                 if m.bias is not None:
                     m.bias.data.zero_()
-        
-        if self.use_dino:
-            self.dino_processor = AutoImageProcessor.from_pretrained("dinov3-vitb16-pretrain-lvd1689m")
-            self.dino_model = AutoModel.from_pretrained(
-                "dinov3-vitb16-pretrain-lvd1689m",
-                dtype=torch.float16,
-                device_map="auto",
-                attn_implementation="sdpa"
-            ).eval()
-            for para in self.dino_model.parameters():
-                para.requires_grad = False
-            self.dino_model.requires_grad_(False)
-            self.dino_patch_size = self.dino_model.config.patch_size
-            self.dino_hidden_size = self.dino_model.config.hidden_size
-            self.dino_num_register_tokens = self.dino_model.config.num_register_tokens 
 
         self.backbone = VGGBNPretrainV3().eval()
         for para in self.backbone.parameters():
@@ -169,59 +172,66 @@ class RefineFeatureNet(nn.Module):
         _,_, h,w = imgs.shape
         if self.upsample:
             imgs = F.interpolate(imgs, size=(int(1.5*h), int(1.5*h)))
-
+        
+        dino_features = None
         if self.use_dino:
             dino_imgs = imgs.clone()
+            dino_imgs = F.interpolate(dino_imgs, size=(256, 256))
+            with torch.no_grad():
+                dino_ret = self.fea_ext.get_vit_attn_feat(dino_imgs)
+                attn, cls_, feat = dino_ret['attn'], dino_ret['cls_'], dino_ret['feat']
+                dino_features = feat.permute(0,2,1).reshape(-1,384,32,32)
             
-        imgs = self.img_norm(imgs) #[6, 3, 128, 128]
+        imgs = self.img_norm(imgs)
         self.backbone.eval()
         with torch.no_grad():
             x0, x1, x2 = self.backbone(imgs)
             x0 = F.normalize(x0, dim=1)
             x1 = F.normalize(x1, dim=1)
             x2 = F.normalize(x2, dim=1)
-        x0 = self.conv0(x0) #[6, 64, 32, 32]
-        x1 = F.interpolate(self.conv1(x1),scale_factor=2,mode='bilinear') #[6, 64, 32, 32]
-        x2 = F.interpolate(self.conv2(x2),scale_factor=4,mode='bilinear') #[6, 64, 32, 32]
-        x = torch.cat([x0,x1,x2],1) #[6, 192, 32, 32]
-        x = self.conv_out(x)  #[6, 128, 32, 32]
-        if self.use_dino:
-            # -------------------------------------------------------- 
-            # 使用dinov3处理，类似test.py中的方式
-            inputs = self.dino_processor(images=dino_imgs, return_tensors="pt")
-            # 计算patch数量
-            img_height, img_width = inputs.pixel_values.shape[-2:]  # 6,3,224,24
-            num_patches_height = img_height // self.dino_patch_size # 224/16=14
-            num_patches_width = img_width // self.dino_patch_size # 224/16=14
-            # 获取模型输出
-            with torch.inference_mode():
-                outputs = self.dino_model(**inputs)
+        
+        # 多尺度特征提取与DINO特征融合
+        if self.use_dino and dino_features is not None:
+            # 调整DINO特征到不同尺度
+            dino_fea_1x = dino_features  # 32x32
+            dino_fea_2x = F.interpolate(dino_fea_1x, scale_factor=2, mode='bilinear')  # 64x64
+            dino_fea_4x = F.interpolate(dino_fea_1x, scale_factor=4, mode='bilinear')  # 128x128
             
-            last_hidden_states = outputs.last_hidden_state  # [6, 1+4+196, 768]
-            # 提取patch features（跳过cls token和register tokens）
-            patch_features_flat = last_hidden_states[:, 1 + self.dino_num_register_tokens:, :]  # [6,196, 768]
+            # 在不同层级融合DINO特征
+            x0_fused = torch.cat([x0, F.interpolate(dino_fea_4x, size=x0.shape[-2:], mode='bilinear')], dim=1)
+            x0 = x0 + self.fuse_conv1(x0_fused)  # 残差连接
             
-            # 转换为空间布局并上采样到32x32
-            patch_features = patch_features_flat.permute(0, 2, 1).reshape(
-                -1, self.dino_hidden_size, num_patches_height, num_patches_width
-            )  # [6, 768, 14, 14]
-            dino_fea = F.interpolate(
-                patch_features, size=(32, 32), mode='bilinear', align_corners=False
-            )  # [6, 768, 32, 32]
-            dino_fea = dino_fea.float()  # 转换为float32
+            x1_fused = torch.cat([x1, F.interpolate(dino_fea_2x, size=x1.shape[-2:], mode='bilinear')], dim=1)
+            x1 = x1 + self.fuse_conv2(x1_fused)  # 残差连接
             
-            # 改进的融合流程（简化版）：
-            # 保持DINO特征的完整信息，使用渐进式网络降维
-            fused_fea = torch.cat((x, dino_fea), dim=1)   # [6, 128+768=896, 32, 32]
-            x_fused = self.fuse_conv(fused_fea)  # [6, 128, 32, 32]
+            x2_fused = torch.cat([x2, F.interpolate(dino_fea_1x, size=x2.shape[-2:], mode='bilinear')], dim=1)
+            x2 = x2 + self.fuse_conv3(x2_fused)  # 残差连接
+        
+        # 特征处理
+        x0 = self.conv0(x0)
+        x1 = F.interpolate(self.conv1(x1), scale_factor=2, mode='bilinear')
+        x2 = F.interpolate(self.conv2(x2), scale_factor=4, mode='bilinear')
+        
+        # 特征拼接与输出
+        x = torch.cat([x0, x1, x2], 1)
+        x = self.conv_out(x)
+        
+        # 最终DINO特征融合
+        if self.use_dino and dino_features is not None:
+            # 引入注意力机制的特征融合
+            dino_fea_aligned = F.interpolate(dino_fea_1x, size=x.shape[-2:], mode='bilinear')
             
-            # 步骤5：残差连接 - 保留部分原始VGG特征，增强梯度流
-            x_residual = self.residual_proj(x)  # [6, 128, 32, 32]
-            x = x_fused + 0.2 * x_residual  # 残差连接，权重可调（建议范围0.1-0.3）
-            # import pdb
-            # pdb.set_trace()
-            # --------------------------------------------------------
-        return x   #[6, 128, 32, 32]
+            # 使用专门的卷积层调整DINO特征通道数，用于注意力计算
+            dino_fea_adjusted = self.attn_conv(dino_fea_aligned)
+            
+            # 注意力权重计算 - 现在维度匹配
+            attn_weights = torch.sigmoid(torch.sum(x * dino_fea_adjusted, dim=1, keepdim=True))
+            
+            # 加权融合
+            fused_fea = torch.cat([x, dino_fea_aligned], dim=1)
+            x = x + attn_weights * self.fuse_conv(fused_fea)  # 注意力引导的残差连接
+        
+        return x
 
 class RefineVolumeEncodingNet(nn.Module):
     def __init__(self,norm_layer='no_norm'):
@@ -321,15 +331,18 @@ from loguru import logger
 class VolumeRefiner(nn.Module):
     default_cfg = {
         "refiner_sample_num": 32,
+        "use_dino": False,
     }
     def __init__(self, cfg, upsample=False):
         self.cfg={**self.default_cfg, **cfg}
         super().__init__()
         
-        self.use_dino = self.cfg.get("use_dino", False)  
-        logger.debug( f"VolumeRefiner use_dino:{self.use_dino}" )
+        # 使用统一的use_dino配置
+        use_dino = self.cfg.get("use_dino", False)  
+        dino_model = self.cfg.get("dino_model", 'dino_vits8')
+        logger.debug( f"VolumeRefiner use_dino:{use_dino}, dino_model:{dino_model}" )
         self.upsample = upsample
-        self.feature_net = RefineFeatureNet('instance', self.use_dino, upsample)
+        self.feature_net = RefineFeatureNet('instance', use_dino, dino_model, upsample)
         self.volume_net = RefineVolumeEncodingNet('instance')
         self.regressor = RefineRegressor(upsample)
         
