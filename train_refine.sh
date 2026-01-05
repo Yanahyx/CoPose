@@ -33,8 +33,8 @@ python3 eval.py --cfg configs/cas6d_train.yaml
 
 # we save one image every 10 frames and maximum image side length is 960
 python prepare.py --action video2image \
-                  --input data/custom/video/mouse-ref.mp4 \
-                  --output data/custom/mouse/images \
+                  --input ../data/custom/video/mouse-ref.mp4 \
+                  --output ../data/custom/mouse/images \
                   --frame_inter 10 \
                   --image_size 960 \
                   --transpose
