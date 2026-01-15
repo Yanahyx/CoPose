@@ -3,8 +3,6 @@ import numpy as np
 import torch
 import os
 import logging
-from pathlib import Path
-from skimage.io import imsave
 
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -168,55 +166,7 @@ class Gen6DEstimator:
         self.ref_geo_dis = self.detector.ref_dis_estimation(torch.from_numpy(ref_poses[:self.cfg['det_ref_view_num']]).float().cuda())
         self.detector.ref_knn(self.ref_geo_dis, k=self.detector.knn)
 
-    def plot_score_heatmap(self, score, save_path=None, scale_factor=4):
-        """
-        将相关性分数绘制成热力图并保存
-        @param score: 分数数组，shape为[1,60,80]或其他维度
-        @param save_path: 保存路径，如果为None则不保存
-        @param scale_factor: 放大倍数，默认4倍（60x80 -> 240x320）
-        @return: 热力图图像数组 (H, W, 3)
-        """
-        # 将score转换为numpy数组（如果是tensor）
-        if torch.is_tensor(score):
-            score = score.cpu().numpy()
-        
-        # 根据score的维度进行处理
-        score_2d = None
-        if score.ndim == 2:
-            # 2D数组，直接使用
-            score_2d = score
-        elif score.ndim == 3:
-            # 3D数组，如[1,60,80]，取第一个通道
-            if score.shape[0] == 1:
-                score_2d = score[0]  # [1,60,80] -> [60,80]
-            else:
-                score_2d = np.mean(score, axis=0)
-        # 归一化到0-255范围
-        score_min = score_2d.min()
-        score_max = score_2d.max()
-        if score_max > score_min:
-            score_norm = ((score_2d - score_min) / (score_max - score_min) * 255).astype(np.uint8)
-        else:
-            score_norm = np.zeros_like(score_2d, dtype=np.uint8)
-        
-        # 应用热力图颜色映射 (使用蓝色系COLORMAP_COOL，从青到蓝)
-        heatmap = cv2.applyColorMap(score_norm, cv2.COLORMAP_COOL)
-        # 将BGR转换为RGB（cv2返回BGR，imsave需要RGB）
-        heatmap = cv2.cvtColor(heatmap, cv2.COLOR_BGR2RGB)
-        
-        # 放大显示（60x80 -> 240x320，默认4倍）
-        h, w = heatmap.shape[:2]
-        if scale_factor > 1:
-            heatmap = cv2.resize(heatmap, (w * scale_factor, h * scale_factor), interpolation=cv2.INTER_NEAREST)
-        
-        if save_path is not None:
-            # 确保目录存在（参考eval_detector.py的方式）
-            Path(save_path).parent.mkdir(exist_ok=True, parents=True)
-            # 使用imsave保存，与eval_detector.py一致
-            imsave(save_path, heatmap)   
-        return heatmap
-
-    def predict(self, que_img, que_K, pose_init=None, save_heatmap_path=None):
+    def predict(self, que_img, que_K, pose_init=None):
         inter_results={}
 
         if pose_init is None:
@@ -230,28 +180,7 @@ class Gen6DEstimator:
                 inter_results['det_position'] = position
                 inter_results['det_scale_r2q'] = scale_r2q
                 inter_results['det_que_img'] = que_img_
-                inter_results['det_score'] = score
-                scales_all = detection_outputs['scales_all'][0]
-                inter_results['det_scales_all'] = scales_all
-                
-                # 绘制score热力图（如果提供了保存路径则保存）
-                if save_heatmap_path is not None:
-                    # 为score和scales_all生成不同的文件名
-                    save_dir = Path(save_heatmap_path).parent
-                    save_name = Path(save_heatmap_path).stem  # 不含扩展名的文件名
-                    save_ext = Path(save_heatmap_path).suffix  # 扩展名
-                    score_heatmap_path = str(save_dir / f'{save_name}_score{save_ext}')
-                    scale_heatmap_path = str(save_dir / f'{save_name}_scale{save_ext}')
-                else:
-                    score_heatmap_path = None
-                    scale_heatmap_path = None
-                
-                score_heatmap = self.plot_score_heatmap(score, save_path=score_heatmap_path)
-                inter_results['det_heatmap'] = score_heatmap
-                
-                # 绘制scales_all热力图
-                scale_heatmap = self.plot_score_heatmap(scales_all, save_path=scale_heatmap_path)
-                inter_results['det_scale_heatmap'] = scale_heatmap
+                print("det_score:", score)
         return None, inter_results
 
 name2estimator={

@@ -1,5 +1,5 @@
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "4"
+os.environ["CUDA_VISIBLE_DEVICES"] = "5"
 import argparse
 import subprocess
 from pathlib import Path
@@ -8,7 +8,7 @@ import numpy as np
 from skimage.io import imsave, imread
 from tqdm import tqdm
 
-from dataset.database import parse_database_name, get_ref_point_cloud
+from dataset.database import parse_database_name, get_ref_point_cloud, get_diameter
 from estimator import name2estimator
 from eval import visualize_intermediate_results
 from prepare import video2image
@@ -32,7 +32,7 @@ def main(args):
     ref_database = parse_database_name(args.database)
     estimator = name2estimator[cfg['type']](cfg)
     estimator.build(ref_database, split_type='all')
-
+    # 从数据库提取物体的3D信息
     object_pts = get_ref_point_cloud(ref_database)
     object_bbox_3d = pts_range_to_bbox_pts(np.max(object_pts,0), np.min(object_pts,0))
 
@@ -43,18 +43,20 @@ def main(args):
     (output_dir / 'images_out').mkdir(exist_ok=True, parents=True)
     (output_dir / 'images_inter').mkdir(exist_ok=True, parents=True)
     (output_dir / 'images_out_smooth').mkdir(exist_ok=True, parents=True)
-
+    #视频转图片
     que_num = video2image(args.video, output_dir/'images_raw', 1, args.resolution, args.transpose)
 
     pose_init = None
     hist_pts = []
     for que_id in tqdm(range(que_num)):
         img = imread(str(output_dir/'images_raw'/f'frame{que_id}.jpg'))
-        # generate a pseudo K
+        # 计算伪内参
         h, w, _ = img.shape
         f=np.sqrt(h**2+w**2)
         K = np.asarray([[f,0,w/2],[0,f,h/2],[0,0,1]],np.float32)
-
+        import ipdb; ipdb.set_trace()
+        
+        #连续帧在上一帧的基础上微调
         if pose_init is not None:
             estimator.cfg['refine_iter'] = 1 # we only refine one time after initialization
         pose_pr, inter_results = estimator.predict(img, K, pose_init=pose_init)
@@ -64,8 +66,18 @@ def main(args):
         bbox_img = draw_bbox_3d(img, pts, (0,0,255))
         imsave(f'{str(output_dir)}/images_out/{que_id}-bbox.jpg', bbox_img)
         np.save(f'{str(output_dir)}/images_out/{que_id}-pose.npy', pose_pr)
-        imsave(f'{str(output_dir)}/images_inter/{que_id}.jpg', visualize_intermediate_results(img, K, inter_results, estimator.ref_info, object_bbox_3d))
-
+        #imsave(f'{str(output_dir)}/images_inter/{que_id}.jpg', visualize_intermediate_results(img, K, inter_results, estimator.ref_info, object_bbox_3d))
+        imsave(
+            f'{str(output_dir)}/images_inter/{que_id}.jpg', 
+            visualize_intermediate_results(
+                img, 
+                K, 
+                inter_results, 
+                estimator.ref_info, 
+                object_bbox_3d,
+                que_id=que_id             # 传入当前帧 ID 方便调试
+            )
+        )
         hist_pts.append(pts)
         pts_ = weighted_pts(hist_pts, weight_num=args.num, std_inv=args.std)
         pose_ = pnp(object_bbox_3d, pts_, K)

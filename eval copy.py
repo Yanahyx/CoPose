@@ -29,7 +29,7 @@ def get_gt_info(que_pose, que_K, render_poses, render_Ks, object_center):
 
     return gt_position, gt_scale_r2q, gt_angle_r2q, gt_ref_idx, gt_bbox, gt_corr[0]
 
-def visualize_intermediate_results(img, K, inter_results, ref_info, object_bbox_3d, \
+def visualize_intermediate_results(object_pts, object_diameter , img, K, inter_results, ref_info, object_bbox_3d, \
                                     object_center=None, pose_gt=None, est_name="",object_name="", que_id=-1 ):
     ref_imgs = ref_info['ref_imgs']  
     if pose_gt is not None:
@@ -37,16 +37,34 @@ def visualize_intermediate_results(img, K, inter_results, ref_info, object_bbox_
             get_gt_info(pose_gt, K, ref_info['poses'], ref_info['Ks'], object_center)
     img_h , img_w , _ = img.shape
     output_imgs = []
+
+    pts2d_gt, _ = project_points(object_pts, pose_gt, K)
+    x0, y0, w, h = cv2.boundingRect(pts2d_gt.astype(np.int32))
+    img_h, img_w, c = img.shape
+    max_r = max(w,h)
+    x1, y1 = min(x0 + 1.5*max_r,img_w), min(y0 + 1.5*max_r,img_h)
+    x0, y0 = max(x0 - 0.5*max_r, 0), max(y0 - 0.5*max_r, 0)
+
     if 'det_scale_r2q' in inter_results and 'sel_angle_r2q' in inter_results:
         det_scale_r2q = inter_results['det_scale_r2q']
         det_position = inter_results['det_position']
         det_que_img = inter_results['det_que_img']
         size = det_que_img.shape[0]
         pr_bbox = np.concatenate([det_position - size / 2 * det_scale_r2q, np.full(2, size) * det_scale_r2q])
+        pr_bbox[0] =  int(pr_bbox[0] )
+        pr_bbox[1] =  int(pr_bbox[1] )
+        pr_bbox[2] =  int(pr_bbox[2])
+        pr_bbox[3] =  int(pr_bbox[3])
+        max_r = max(pr_bbox[2], pr_bbox[3] )
         bbox_img = img
         bbox_img = draw_bbox(bbox_img, pr_bbox, color=(0, 0, 255))
+        x0,y0,x1,y1 = pr_bbox[0], pr_bbox[1],  pr_bbox[0] + pr_bbox[2],  pr_bbox[1] +  pr_bbox[3]
+        x1, y1 = int(min(x0 + 1.5*max_r,img_w)), int(min(y0 + 1.5*max_r,img_h))
+        x0, y0 = int(max(x0 - 0.5*max_r, 0)), int(max(y0 - 0.5*max_r, 0))
         if pose_gt is not None: bbox_img = draw_bbox(bbox_img, gt_bbox, color=(0, 255, 0))
+        crop_img = bbox_img[y0:y1, x0:x1,:]
         imsave(f'../data/exp/vis_inter/{est_name}/{object_name}/{que_id}-bbox2d.jpg',bbox_img )
+        imsave(f'../data/exp/vis_inter/{est_name}/{object_name}/{que_id}-bbox2d-crop.jpg', cv2.resize(crop_img, (512, 512)) )   
         output_imgs.append(bbox_img)
         
         # visualize selection
@@ -69,25 +87,53 @@ def visualize_intermediate_results(img, K, inter_results, ref_info, object_bbox_
         pose_in, pose_out = refine_poses[k-1], refine_poses[k]
         bbox_pts_in, _ = project_points(object_bbox_3d, pose_in, K)
         bbox_pts_out, _ = project_points(object_bbox_3d, pose_out, K)
-        bbox_img = draw_bbox_3d(img, bbox_pts_in, (255, 0, 0))
+        prj_err, obj_err, pose_err = compute_pose_errors(object_pts, pose_out, pose_gt, K)
+        is_add01 = obj_err>0.1*object_diameter
+        img_render = img.copy()
+        if is_add01: # bgr
+            img_render = draw_bbox_3d(img_render, bbox_pts_out, (0, 0, 255) )
+        else:
+            img_render = draw_bbox_3d(img_render.copy(), bbox_pts_out, (0, 0, 255))
         if pose_gt is not None:
             bbox_pts_gt, _ = project_points(object_bbox_3d, pose_gt, K)
-            bbox_img = draw_bbox_3d(bbox_img, bbox_pts_gt, (0, 255, 0))
-        bbox_img = draw_bbox_3d(bbox_img, bbox_pts_out, (0, 0, 255))
+            img_render = draw_bbox_3d(img_render, bbox_pts_gt, (0, 255, 0))
+        crop_img = img_render[y0:y1, x0:x1,:]
+        imsave(f'../data/exp/vis_final/{est_name}/{object_name}/{que_id}-refiner-{k}-crop.jpg', cv2.resize(crop_img, (512, 512)) )   
+        output_imgs.append(bbox_img)
         refine_imgs.append(bbox_img)
-    output_imgs.append(concat_images_list(*refine_imgs))
+
+    if len(refine_poses)!=0:
+        output_imgs.append(concat_images_list(*refine_imgs))
+        # cv2.putText(output_imgs[-1], str(is_add01) , (0, 0), cv2.FONT_HERSHEY_SIMPLEX,1, (255, 255, 255), 2, cv2.LINE_AA)
     return concat_images_list(*output_imgs)
 
-def visualize_final_poses( img, K, object_bbox_3d, pose_pr, pose_gt=None):
+def visualize_final_poses(object_pts, object_diameter , img, K, object_bbox_3d, pose_pr, pose_gt=None):
     bbox_pts_pr, _ = project_points(object_bbox_3d, pose_pr, K)
 
     pts2d_pr, _ = project_points(object_pts, pose_pr, K)
     prj_err, obj_err, pose_err = compute_pose_errors(object_pts, pose_pr, pose_gt, K)
     bbox_img = img
+    point_size = 1
+    thickness = 1
+    pts2d_gt, _ = project_points(object_pts, pose_gt, K)
+    x0, y0, w, h = cv2.boundingRect(pts2d_gt.astype(np.int_))
+    img_h, img_w, c = img.shape
+    max_r = max(w,h)
+    x1, y1 = min(x0 + 1.5*max_r,img_w), min(y0 + 1.5*max_r,img_h)
+    x0, y0 = max(x0 - 0.5*max_r, 0), max(y0 - 0.5*max_r, 0)
+    
+    alpha = 0.5
     if pose_gt is not None:
         bbox_pts_gt, _ = project_points(object_bbox_3d, pose_gt, K)
         bbox_img = draw_bbox_3d(bbox_img, bbox_pts_gt)
-    bbox_img = draw_bbox_3d(bbox_img, bbox_pts_pr, (0, 0, 255))
+    
+    if obj_err>0.1*object_diameter:
+        bbox_img = draw_bbox_3d(bbox_img, bbox_pts_pr, (0, 0, 255))
+        return bbox_img,[x0,y0,x1,y1]
+    else:
+        bbox_img = draw_bbox_3d(bbox_img, bbox_pts_pr, (0, 0, 255))
+        return bbox_img,[x0,y0,x1,y1]
+    return None, None
     return bbox_img
 
 import time
@@ -159,7 +205,10 @@ def main(args):
                 final_img, bbox2d = visualize_final_poses(object_pts , object_diameter, img, K, object_bbox_3d, pose_pr, pose_gt)                
                 if final_img is not None and visualize_final_poses is not None:
                     x0, y0, x1, y1 = [int(x) for  x in bbox2d]
+                    crop_img = final_img[y0:y1, x0:x1,:]
                     imsave(f'../data/exp/vis_final/{est_name}/{object_name}/{idx}-bbox3d.jpg', final_img)
+                    imsave(f'../data/exp/vis_final/{est_name}/{object_name}/{idx}-bbox3d-crop.jpg', \
+                           cv2.resize(crop_img, (512, 512)) )   
 
         pose_gt_list = [que_database.get_pose(que_id) for que_id in new_que_ids]
         que_Ks = [que_database.get_K(que_id) for que_id  in new_que_ids]

@@ -100,7 +100,6 @@ def main(args):
     Path(f'../data/exp/eval/poses/{object_name}').mkdir(exist_ok=True,parents=True)
     Path(f'../data/exp/vis_inter/{est_name}/{object_name}').mkdir(exist_ok=True,parents=True)
     Path(f'../data/exp/vis_final/{est_name}/{object_name}').mkdir(exist_ok=True,parents=True)
-    Path(f'../data/exp/vis_heatmap/{est_name}/{object_name}').mkdir(exist_ok=True,parents=True)
 
     iou_list = []
     gt_scale_r2q_list = []
@@ -111,7 +110,7 @@ def main(args):
         img = que_database.get_image(que_id)
         K = que_database.get_K(que_id)
 
-        pose_pr, inter_results = estimator.predict(img, K, save_heatmap_path=f'../data/exp/vis_heatmap/{est_name}/{object_name}/{que_id}-heatmap.jpg')
+        pose_pr, inter_results = estimator.predict(img, K)
 
         pose_gt = que_database.get_pose(que_id)
 

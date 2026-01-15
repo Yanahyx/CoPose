@@ -33,8 +33,18 @@ python3 eval.py --cfg configs/cas6d_train.yaml
 
 # we save one image every 10 frames and maximum image side length is 960
 python prepare.py --action video2image \
-                  --input ../data/custom/video/mouse-ref.mp4 \
-                  --output ../data/custom/mouse/images \
+                  --input ../data/custom/video/blue-ref.mp4 \
+                  --output ../data/custom/blue/images \
                   --frame_inter 10 \
                   --image_size 960 \
                   --transpose
+python prepare.py --action sfm --database_name custom/pink --colmap /data16t/heyx/colmap/build/src/colmap/exe/colmap
+
+python predict.py --cfg configs/gen6d_train.yaml \
+                  --database custom/logi \
+                  --video ../data/custom/video/logi-test.mp4 \
+                  --resolution 960 \
+                  --transpose \
+                  --output ../data/custom/logi/test3\
+                  --ffmpeg /usr/bin/ffmpeg
+

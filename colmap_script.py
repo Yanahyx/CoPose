@@ -87,7 +87,7 @@ def create_db_from_database(database, ref_ids, database_path: Path):
     db.close()
 
 def build_colmap_model_no_pose(database: BaseDatabase, colmap_path='colmap'):
-    colmap_root = Path('data') / database.database_name / 'colmap'
+    colmap_root = Path('../data') / database.database_name / 'colmap'
     colmap_root.mkdir(exist_ok=True, parents=True)
     image_path = colmap_root / 'images'
     database_path = colmap_root / 'database.db'
@@ -95,7 +95,7 @@ def build_colmap_model_no_pose(database: BaseDatabase, colmap_path='colmap'):
     ref_ids, _ = get_database_split(database, 'all')
 
     dump_images(database, ref_ids, image_path)
-    create_db_from_database(database, ref_ids, database_path)
+    #create_db_from_database(database, ref_ids, database_path)
     extract_and_match_sift(colmap_path, database_path, image_path)
 
     sparse_model_path = colmap_root / f'sparse'
@@ -124,3 +124,4 @@ def clean_colmap_project(database, split_name):
     os.system(f'rm {str(dense_model_path / "sparse")} -r')
     os.system(f'rm {str(dense_model_path / "stereo" / "normal_maps")} -r')
     os.system(f'rm {str(dense_model_path / "stereo" / "depth_maps")}/*.photometric.bin')
+

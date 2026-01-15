@@ -236,7 +236,7 @@ class GenMOPDatabase(BaseDatabase):
 class CustomDatabase(BaseDatabase):
     def __init__(self, database_name):
         super().__init__(database_name)
-        self.root = Path(os.path.join('data',database_name))
+        self.root = Path(os.path.join('../data',database_name))
         self.img_dir = self.root / 'images'
         if (self.root/'img_fns.pkl').exists():
             self.img_fns = read_pickle(str(self.root/'img_fns.pkl'))
